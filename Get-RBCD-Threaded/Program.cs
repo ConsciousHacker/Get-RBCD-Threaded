@@ -61,6 +61,8 @@ namespace Get_RBCD
             bool help = false;
             bool searchForest = false;
             int computerDate = 0;
+            string userobject = null;
+            string groupobject = null;
 
             var options = new OptionSet()
             {
@@ -68,10 +70,13 @@ namespace Get_RBCD
                 {"p|password=", "Password for the user", v => password = v },
                 {"d|domain=", "Fully qualified domain name to authenticate to", v => domain = v},
                 {"s|searchforest", "Enumerate all domains and forests", v => searchForest = true },
-                {"o|outputfile=", "Output to a CSV file. Please provided full path to file and file name.", v => outputfile = v },
+                {"f|outputfile=", "Output to a CSV file. Please provided full path to file and file name.", v => outputfile = v },
                 {"i|insecure", "Force insecure LDAP connect if LDAPS is causing connection issues.", v => ldapInSecure = true },
                 {"pwdlastset=", "Filter computers based on pwdLastSet to remove stale computer objects. If you set this to 90, it will filter out computer objects whose pwdLastSet date is more than 90 days ago", (int v) => computerDate = v },
+                {"uo|userobject=", "Granular search for a single user object using samaccountname", v => userobject = v },
+                {"go|groupobject=", "Granular search for a single group object using samaccountname", v => groupobject = v },
                 { "h|?|help", "Show this help", v => help = true }
+
             };
 
             string currentDomain = null;
@@ -251,9 +256,20 @@ namespace Get_RBCD
                         }
                         
 
-                        
-                        Get_Users(adEntry, sidMapList, allSids, currentDomain);
-                        Get_Groups(adEntry, sidMapList, allSids, currentDomain);
+                        if (userobject != null)
+                        {
+
+                            Get_Users(adEntry, sidMapList, allSids, currentDomain, userobject);
+                        }
+                        else if (groupobject != null)
+                        {
+                            Get_Groups(adEntry, sidMapList, allSids, currentDomain, groupobject);
+                        }
+                        else
+                        {
+                            Get_Users(adEntry, sidMapList, allSids, currentDomain, userobject);
+                            Get_Groups(adEntry, sidMapList, allSids, currentDomain, groupobject);
+                        }
                         aclResults = Get_Computers(adEntry, sidMapList, allSids, currentDomain, aclResults, computerDate);
 
                         
@@ -288,8 +304,21 @@ namespace Get_RBCD
                     List<rbcd> rbcdList = new List<rbcd>();
                     List<SearchResult> resultList = new List<SearchResult>();
 
-                    Get_Users(adEntry, sidMapList, allSids, currentDomain);
-                    Get_Groups(adEntry, sidMapList, allSids, currentDomain);
+                    if (userobject != null)
+                    {
+
+                        Get_Users(adEntry, sidMapList, allSids, currentDomain, userobject);
+                    }
+                    else if (groupobject != null)
+                    {
+                        Get_Groups(adEntry, sidMapList, allSids, currentDomain, groupobject);
+                    }
+                    else
+                    {
+                        Get_Users(adEntry, sidMapList, allSids, currentDomain, userobject);
+                        Get_Groups(adEntry, sidMapList, allSids, currentDomain, groupobject);
+                    }
+
                     aclResults = Get_Computers(adEntry, sidMapList, allSids, currentDomain, aclResults, computerDate);
 
                     foreach (SearchResult acl in aclResults)
@@ -354,11 +383,20 @@ namespace Get_RBCD
             }
         }
 
-        public static void Get_Users(DirectoryEntry adEntry, List<sidMap> sidMapList, List<string> allSids, string currentDomain)
+        public static void Get_Users(DirectoryEntry adEntry, List<sidMap> sidMapList, List<string> allSids, string currentDomain, string userobject)
         {
             DirectorySearcher userSearch = new DirectorySearcher(adEntry);
 
-            userSearch.Filter = "(&(samAccountType=805306368))";
+            if (userobject != null)
+            {
+                userSearch.Filter = "(&(samAccountType=805306368)(|(samAccountName=" + userobject + ")))";
+                Console.WriteLine("User object filter enabled for " + userobject);
+            }
+            else
+            {
+                userSearch.Filter = "(&(samAccountType=805306368))";
+            }
+
             userSearch.PropertiesToLoad.Add("objectsid");
             userSearch.PropertiesToLoad.Add("samaccountname");
             userSearch.PageSize = int.MaxValue;
@@ -383,11 +421,19 @@ namespace Get_RBCD
             }
         }
 
-        public static void Get_Groups(DirectoryEntry adEntry, List<sidMap> sidMapList, List<string> allSids, string currentDomain)
+        public static void Get_Groups(DirectoryEntry adEntry, List<sidMap> sidMapList, List<string> allSids, string currentDomain, string groupobject)
         {
             DirectorySearcher groupSearch = new DirectorySearcher(adEntry);
+            if (groupobject != null)
+            {
+                groupSearch.Filter = "(&(objectCategory=group)(|(samAccountName=" + groupobject + ")))";
+                Console.WriteLine("Group object filter enabled for " + groupobject);
+            }
+            else
+            {
+                groupSearch.Filter = "(&(objectCategory=group))";
+            }
 
-            groupSearch.Filter = "(&(objectCategory=group))";
             groupSearch.PropertiesToLoad.Add("objectsid");
             groupSearch.PropertiesToLoad.Add("samaccountname");
             groupSearch.PageSize = int.MaxValue;
@@ -512,6 +558,32 @@ namespace Get_RBCD
                         {
                             var objectSid = sidMapList.FirstOrDefault(o => o.ObjectSID == sid);
                             rbcdList.Add(new rbcd(objectSid.SamAccountName, objectSid.DomainName, hostname, "WriteOwner"));
+                        }
+                    }
+                    else if (adRule.ActiveDirectoryRights.ToString().Contains("WriteProperty"))
+                    {
+                        if (allSids.Contains(sid) && sid != computerSid)
+                        {
+                            var objectSid = sidMapList.FirstOrDefault(o => o.ObjectSID == sid);
+                            rbcdList.Add(new rbcd(objectSid.SamAccountName, objectSid.DomainName, hostname, "WriteProperty"));
+                        }
+                    }
+
+                    else if (adRule.ActiveDirectoryRights.ToString().Contains("AllExtendedRights"))
+                    {
+                        if (allSids.Contains(sid) && sid != computerSid)
+                        {
+                            var objectSid = sidMapList.FirstOrDefault(o => o.ObjectSID == sid);
+                            rbcdList.Add(new rbcd(objectSid.SamAccountName, objectSid.DomainName, hostname, "AllExtendedRights"));
+                        }
+                    }
+
+                    else if (adRule.ActiveDirectoryRights.ToString().Contains("WriteDacl"))
+                    {
+                        if (allSids.Contains(sid) && sid != computerSid)
+                        {
+                            var objectSid = sidMapList.FirstOrDefault(o => o.ObjectSID == sid);
+                            rbcdList.Add(new rbcd(objectSid.SamAccountName, objectSid.DomainName, hostname, "WriteDacl"));
                         }
                     }
 
